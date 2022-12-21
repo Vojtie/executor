@@ -1,3 +1,4 @@
+#include "err.h"
 #include "utils.h"
 
 #include <assert.h>
@@ -14,7 +15,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "err.h"
 
 void set_close_on_exec(int file_descriptor, bool value)
 {
@@ -88,7 +88,7 @@ bool read_line(char* buffer, size_t size_of_buffer, FILE* file, bool trim_newlin
     if (len + 1 > size_of_buffer)
         fatal("Line too long: %d > %d.", len, size_of_buffer - 1);
 
-    if (len > 1 && line[len - 1] == '\n') {
+    if (trim_newline && len > 1 && line[len - 1] == '\n') {
         line[len - 1] = '\0';
         len--;
     }

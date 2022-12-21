@@ -22,5 +22,4 @@ add_executable(wsr writesleeprepeat.c)
 add_example_program(stdinlinereader)
 add_example_program(output)
 add_example_program(executor)
-target_link_libraries(executor utils)
 
