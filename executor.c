@@ -1,53 +1,94 @@
-#include "commands.h"
-#include "utils.h"
 #include <assert.h>
-#include <pthread.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
 #include <errno.h>
-#define X 10
+#include <pthread.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "commands.h"
+#include "err.h"
+#include "utils.h"
+
 int new_task_id = 0;
 struct Task *tasks[MAX_N_TASKS];
 
 void quit();
 void out();
 
-void run(struct Command *run_info, sem_t *mutex, char *output)
+void manage_output(int fd, char *buf, sem_t *mutex)
 {
-    printf("hello from %d :>\n", run_info->task_id);
-    int fd[2];
-    pipe(fd);
-    pid_t pid = fork();
-    if (!pid) {
-        dup2(fd[1], STDOUT_FILENO);
-        close(fd[0]);
-        if (run_info->task_args[0][0] == '.')
-            execv(run_info->task_args[0], run_info->task_args);
-        else
-            execvp(run_info->task_args[0], run_info->task_args);
-        fprintf(stderr, "error in exec\n");
-        exit(1);
-    }
-    close(fd[1]);
-    dup2(fd[0], STDIN_FILENO);
-    char buffer[MAX_LINE_LEN];
-    while (true) {
-        // put read line after acquiring mutex
-        bool read_l = read_line(buffer, MAX_LINE_LEN, stdin, true);
-        if (!read_l)
-            break;
+    char local_buf[MAX_LINE_LEN];
+    FILE *in_stream = fdopen(fd, "r");
 
+    fprintf(stderr, "waiting for input\n");
+
+    while (read_line(local_buf, MAX_LINE_LEN, in_stream, true)) {
         assert(!sem_wait(mutex));
-        memcpy(output, buffer, MAX_LINE_LEN);
+        memcpy(buf, local_buf, MAX_LINE_LEN);
         assert(!sem_post(mutex));
-
-        printf("proc %d: task %d: %s\n", getpid(), run_info->task_id, buffer);
     }
-    close(fd[0]);
-    printf("goodbye from %d :<\n", run_info->task_id);
-    free_split_string(run_info->to_be_freed);
-    exit(0);
+
+    fprintf(stderr, "finished reading\n");
+}
+
+void run(char **run_args, task_id_t task_id, sem_t *stdout_mutex, sem_t *stderr_mutex, char *stdout_buf, char *stderr_buf)
+{
+    printf("running task %d :>\n", task_id);
+
+    char **task_args = run_args + 1;
+    int fderr[2];
+    int fdout[2];
+    pipe(fderr);
+    pipe(fdout);
+    pid_t rnr_pid = fork();
+
+    if (!rnr_pid) {
+        dup2(fdout[1], STDOUT_FILENO);
+        close(fdout[0]);
+        close(fdout[1]);
+
+        dup2(fderr[1], STDERR_FILENO);
+        close(fderr[1]);
+        close(fderr[0]);
+
+        if (task_args[0][0] == '.') {
+            execv(task_args[0], task_args);
+            fatal("error in execv(./)");
+        } else {
+            execvp(task_args[0], task_args);
+            fatal("error in execvp()");
+        }
+    }
+    close(fdout[1]);
+    close(fderr[1]);
+
+    pid_t stdout_rdr_pid = fork();
+    if (!stdout_rdr_pid) {
+        close(fderr[0]);
+        manage_output(fdout[0], stdout_buf, stdout_mutex);
+        close(fdout[0]);
+        exit(0);
+    }
+    pid_t stderr_rdr_pid = fork();
+    if (!stderr_rdr_pid) {
+        close(fdout[0]);
+        manage_output(fderr[0], stderr_buf, stderr_mutex);
+        close(fderr[0]);
+        exit(0);
+    }
+    close(fdout[0]);
+    close(fderr[0]);
+
+//    assert(waitpid(stdout_rdr_pid, NULL, 0) == stdout_rdr_pid);
+//    assert(waitpid(stderr_rdr_pid, NULL, 0) == stderr_rdr_pid);
+//
+//    printf("ending task %d :<\n", task_id);
+//
+//    destroy(run_args, stdout_mutex, stderr_mutex);
+    exit(0); // closes opened streams
 }
 
 struct Task *init_task()
@@ -65,54 +106,78 @@ struct Task *init_task()
     if (tasks[new_task_id] == MAP_FAILED)
         exit(1);
 
+    tasks[new_task_id]->is_running = true;
     tasks[new_task_id]->task_id = new_task_id;
-    memset(tasks[new_task_id]->output, '\0', MAX_LINE_LEN);
-    if (!sem_init(&tasks[new_task_id]->mutex, 1, 1)) {
-        fprintf(stderr, " (%d; %s)\n", errno, strerror(errno));
-        exit(1);
+    memset(tasks[new_task_id]->stdout_buff, '\0', MAX_LINE_LEN);
+    memset(tasks[new_task_id]->stderr_buff, '\0', MAX_LINE_LEN);
+
+    if (sem_init(&tasks[new_task_id]->stdout_mutex, 1, 1)) {
+        fatal("sem init failed\n");
+    }
+    if (sem_init(&tasks[new_task_id]->stderr_mutex, 1, 1)) {
+        fatal("sem init failed\n");
     }
 
     return tasks[new_task_id++];
 }
 
+void print_line(sem_t *mutex, task_id_t task_id, const char *line, const char *line_src_strm)
+{
+    assert(!sem_wait(mutex));
+    printf("Task %d %s: '%s'.\n", task_id, line_src_strm, line);
+    assert(!sem_post(mutex));
+}
+
 int main(int argc, char *argv[])
 {
+//    fatal("");
     char input[511];
-    while (true) {
+    while (true)
+    {
         assert(read_line(input, 511, stdin, true));
         char **args = split_string(input);
-        if (*args == NULL) exit(1);
+        assert(*args);
 
-//        int i = 0;
-//        while (args[i] != NULL) printf("%s", args[i++]);
-
-        if (!strncmp(*args, "quit", 4)) {
+        if (!strcmp(*args, "quit")) {
             quit();
             return 0;
-        } else if (!strncmp(*args, "run", 3)) {
+        }
+        else if (!strcmp(*args, "run")) {
             assert(args[1]);
             struct Task *task = init_task();
 
-            struct Command *command = malloc(sizeof(struct Command));
-            command->task_id = new_task_id;
-            command->task_args = args + 1;
-            command->to_be_freed = args;
-
             pid_t pid = fork();
             if (!pid) {
-                run(command, &task->mutex, task->output);
+                run(args, task->task_id, &task->stdout_mutex, &task->stderr_mutex, task->stdout_buff, task->stderr_buff);
                 return 0;
             }
             task->pid = pid;
-            free(command);
             free_split_string(args);
-        } else if (!strncmp(*args, "out", 3)) {
+        }
+        else if (!strcmp(*args, "out") || !strcmp(*args, "err")) {
             assert(args[1]);
             task_id_t task_id = (task_id_t)strtol(args[1], NULL, 10);
-            assert(!sem_wait(&tasks[task_id]->mutex));
-            printf("Task %d stdout: %s.\n", task_id, tasks[task_id]->output);
-            assert(!sem_post(&tasks[task_id]->mutex));
+
+            if (task_id >= new_task_id) {
+                fprintf(stderr, "task %hu has not been run!\n", task_id);
+                continue;
+            }
+            struct Task *task = tasks[task_id];
+
+            if (!strcmp(*args, "out"))
+                print_line(&task->stdout_mutex, task->task_id, task->stdout_buff, "stdout");
+            else
+                print_line(&task->stderr_mutex, task->task_id, task->stderr_buff, "stderr");
         }
+        else if (!strcmp(*args, "sleep")) {
+            assert(args[1]);
+            long long nap_time = strtoll(args[1], NULL, 10);
+            fprintf(stderr, "taking a nap... zZzz\n");
+            usleep(nap_time);
+            fprintf(stderr, "woke up :D armed and ready!\n");
+        }
+        else if (strcmp(*args, "\n") != 0)
+            fprintf(stderr, "wrong command\n");
     }
     return 0;
 }

@@ -11,6 +11,8 @@
 #include <sys/mman.h>
 #include <semaphore.h>
 
+#include "utils.h"
+
 #define MAX_N_TASKS 4096
 #define MAX_LINE_LEN 1022 + 1
 
@@ -40,8 +42,17 @@ struct Command {
 struct Task {
     task_id_t task_id;
     pid_t pid;
-    char output[MAX_LINE_LEN];
-    sem_t mutex;
+    char stdout_buff[MAX_LINE_LEN];
+    char stderr_buff[MAX_LINE_LEN];
+    sem_t stdout_mutex;
+    sem_t stderr_mutex;
+    bool is_running;
 };
+
+void destroy(char **split_string, sem_t *m1, sem_t *m2) {
+    assert(!sem_destroy(m1));
+    assert(!sem_destroy(m2));
+    free_split_string(split_string);
+}
 
 #endif // MIMUW_FORK_COMMANDS_H
