@@ -42,6 +42,9 @@ struct Command {
 struct Task {
     task_id_t task_id;
     pid_t pid;
+    pid_t ppid;
+    pid_t stdout_rdr_pid;
+    pid_t stderr_rdr_pid;
     char stdout_buff[MAX_LINE_LEN];
     char stderr_buff[MAX_LINE_LEN];
     sem_t stdout_mutex;
