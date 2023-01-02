@@ -26,7 +26,7 @@ void manage_output(int fd, char *buf, sem_t *mutex)
     char local_buf[MAX_LINE_LEN];
     FILE *in_stream = fdopen(fd, "r");
 
-    fprintf(stderr, "waiting for input\n");
+//    fprintf(stderr, "waiting for input\n");
 // TODO rozroznienie linii od jej czesci
     while (read_line(local_buf, MAX_LINE_LEN, in_stream, true)) {
         assert(!sem_wait(mutex));
@@ -34,12 +34,12 @@ void manage_output(int fd, char *buf, sem_t *mutex)
         assert(!sem_post(mutex));
     }
 
-    fprintf(stderr, "finished reading\n");
+//    fprintf(stderr, "finished reading\n");
 }
 
 void handler(int sig)
 {   // inherited main_mutex
-    fprintf(stderr, "handler\n");
+//    fprintf(stderr, "handler\n");
     task_id_t task_id = new_task_id - 1;
     struct Task *task = tasks[task_id];
     pid_t rnr_pid = tasks[task_id]->pid;
@@ -75,8 +75,37 @@ void run(char **run_args, pid_t *runner_pid, task_id_t task_id, sem_t *stdout_mu
     int fdout[2];
     pipe(fderr);
     pipe(fdout);
-    pid_t rnr_pid = fork();
 
+    pid_t stdout_rdr_pid = fork();
+    if (!stdout_rdr_pid) {
+        close(fdout[1]);
+        close(fderr[1]);
+        close(fderr[0]);
+        manage_output(fdout[0], stdout_buf, stdout_mutex);
+        close(fdout[0]);
+        exit(0);
+    }
+    pid_t stderr_rdr_pid = fork();
+    if (!stderr_rdr_pid) {
+        close(fdout[1]);
+        close(fderr[1]);
+        close(fdout[0]);
+        manage_output(fderr[0], stderr_buf, stderr_mutex);
+        close(fderr[0]);
+        exit(0);
+    }
+    close(fdout[0]);
+    close(fderr[0]);
+    tasks[task_id]->stdout_rdr_pid = stdout_rdr_pid;
+    tasks[task_id]->stderr_rdr_pid = stderr_rdr_pid;
+    // change SIGINT handler to kill child processes
+    struct sigaction new_action;
+    sigemptyset(&new_action.sa_mask);
+    new_action.sa_handler = handler;
+    new_action.sa_flags = 0;
+    assert(!sigaction(SIGINT, &new_action, NULL));
+
+    pid_t rnr_pid = fork();
     if (!rnr_pid) {
         dup2(fdout[1], STDOUT_FILENO);
         close(fdout[0]);
@@ -99,48 +128,23 @@ void run(char **run_args, pid_t *runner_pid, task_id_t task_id, sem_t *stdout_mu
     close(fdout[1]);
     close(fderr[1]);
 
-    pid_t stdout_rdr_pid = fork();
-    if (!stdout_rdr_pid) {
-        close(fderr[0]);
-        manage_output(fdout[0], stdout_buf, stdout_mutex);
-        close(fdout[0]);
-        exit(0);
-    }
-    pid_t stderr_rdr_pid = fork();
-    if (!stderr_rdr_pid) {
-        close(fdout[0]);
-        manage_output(fderr[0], stderr_buf, stderr_mutex);
-        close(fderr[0]);
-        exit(0);
-    }
-    close(fdout[0]);
-    close(fderr[0]);
-    tasks[task_id]->stdout_rdr_pid = stdout_rdr_pid;
-    tasks[task_id]->stderr_rdr_pid = stderr_rdr_pid;
-    // change SIGINT handler to kill child processes
-    struct sigaction new_action;
-    sigemptyset(&new_action.sa_mask);
-    new_action.sa_handler = handler;
-    new_action.sa_flags = 0;
-    assert(!sigaction(SIGINT, &new_action, NULL));
-
     assert(!sem_post(main_mutex));
     // now we can receive a SIGINT from main process
     int status;
     if ( // TODO system used to print 'waitpid failed: interrupted system call' and doesn't anymore
         waitpid(rnr_pid, &status, 0)
                 == -1) {
-            fprintf(stderr, "waitpid interrupted");
+//            fprintf(stderr, "waitpid interrupted");
             exit(EXIT_FAILURE);
     }
-    fprintf(stderr, "runner finished\n");
+//    fprintf(stderr, "runner finished\n");
     assert(!sem_wait(main_mutex));
     // now we cannot receive SIGINT from main process
     tasks[task_id]->is_running = false;
-    fprintf(stderr, "runner finished mutexed\n");
+//    fprintf(stderr, "runner finished mutexed\n");
 
-    kill(stdout_rdr_pid, SIGINT);
-    kill(stderr_rdr_pid, SIGINT);
+//    kill(stdout_rdr_pid, SIGINT);
+//    kill(stderr_rdr_pid, SIGINT);
     assert(waitpid(stdout_rdr_pid, NULL, 0) != -1);
     assert(waitpid(stderr_rdr_pid, NULL, 0) != -1);
 
@@ -152,7 +156,7 @@ void run(char **run_args, pid_t *runner_pid, task_id_t task_id, sem_t *stdout_mu
         printf("Task %d ended: signalled.\n", task_id);
     }
     assert(!sem_post(main_mutex));
-    fprintf(stderr, "goodbye\n");
+//    fprintf(stderr, "goodbye\n");
 //    assert(waitpid(stdout_rdr_pid, NULL, 0) == stdout_rdr_pid);
 //    assert(waitpid(stderr_rdr_pid, NULL, 0) == stderr_rdr_pid);
 //
@@ -239,7 +243,7 @@ int main(void)
             task_id_t task_id = (task_id_t)strtol(args[1], NULL, 10);
 
             if (task_id >= new_task_id) {
-                fprintf(stderr, "task %hu has not been run!\n", task_id);
+//                fprintf(stderr, "task %hu has not been run!\n", task_id);
                 continue;
             }
             struct Task *task = tasks[task_id];
@@ -252,16 +256,16 @@ int main(void)
         else if (!strcmp(*args, "sleep")) {
             assert(args[1]);
             long long nap_time = strtoll(args[1], NULL, 10);
-            fprintf(stderr, "taking a nap... zZzz\n");
+//            fprintf(stderr, "taking a nap... zZzz\n");
             usleep(nap_time);
-            fprintf(stderr, "woke up :D armed and ready!\n");
+//            fprintf(stderr, "woke up :D armed and ready!\n");
         }
         else if (!strcmp(*args, "kill")) {
             assert(args[1]);
             task_id_t task_id = (task_id_t)strtol(args[1], NULL, 10);
 
             if (task_id >= new_task_id) {
-                fprintf(stderr, "task %hu has not been run!\n", task_id);
+//                fprintf(stderr, "task %hu has not been run!\n", task_id);
                 assert(!sem_post(main_mutex));
                 continue;
             }
@@ -271,7 +275,7 @@ int main(void)
             }
         }
         else if (strcmp(*args, "\n") != 0)
-            fprintf(stderr, "wrong command\n"); //TODO break
+//            fprintf(stderr, "wrong command\n"); //TODO break
 
         assert(!sem_post(main_mutex));
     }
