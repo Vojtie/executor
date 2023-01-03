@@ -51,8 +51,8 @@ void handler(int sig)
         exit(EXIT_FAILURE);
     }
     task->is_running = false;
-    kill(task->stdout_rdr_pid, SIGINT);
-    kill(task->stderr_rdr_pid, SIGINT);
+//    kill(task->stdout_rdr_pid, SIGINT);
+//    kill(task->stderr_rdr_pid, SIGINT);
     assert(waitpid(task->stdout_rdr_pid, NULL, 0) != -1);
     assert(waitpid(task->stderr_rdr_pid, NULL, 0) != -1);
 
@@ -220,7 +220,6 @@ int main(void)
         char **args = split_string(input);
         assert(*args);
         assert(!sem_wait(main_mutex));
-
         if (!strcmp(*args, "quit")) {
             kill_tasks();
             break;
@@ -242,10 +241,11 @@ int main(void)
             assert(args[1]);
             task_id_t task_id = (task_id_t)strtol(args[1], NULL, 10);
 
-            if (task_id >= new_task_id) {
-//                fprintf(stderr, "task %hu has not been run!\n", task_id);
-                continue;
-            }
+//            if (task_id >= new_task_id) {
+////                fprintf(stderr, "task %hu has not been run!\n", task_id);
+//                sem_post(main_mutex);
+//                continue;
+//            }
             struct Task *task = tasks[task_id];
 
             if (!strcmp(*args, "out"))
@@ -257,8 +257,8 @@ int main(void)
             assert(args[1]);
             long long nap_time = strtoll(args[1], NULL, 10);
 //            fprintf(stderr, "taking a nap... zZzz\n");
-            usleep(nap_time);
-//            fprintf(stderr, "woke up :D armed and ready!\n");
+            usleep(nap_time * 1000);
+            fprintf(stderr, "woke up :D armed and ready!\n");
         }
         else if (!strcmp(*args, "kill")) {
             assert(args[1]);
@@ -274,9 +274,9 @@ int main(void)
                 continue;
             }
         }
-        else if (strcmp(*args, "\n") != 0)
-//            fprintf(stderr, "wrong command\n"); //TODO break
-
+        else if (strcmp(*args, "\n") != 0) {
+            fprintf(stderr, "wrong command\n"); // TODO break
+        }
         assert(!sem_post(main_mutex));
     }
     assert(!sem_destroy(main_mutex));
