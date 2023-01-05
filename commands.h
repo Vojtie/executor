@@ -42,15 +42,23 @@ struct Command {
 struct Task {
     task_id_t task_id;
     pid_t pid;
-    pid_t ppid;
-    pid_t stdout_rdr_pid;
-    pid_t stderr_rdr_pid;
+    pthread_t controller;
+    pthread_t out_reader;
+    pthread_t err_reader;
     char stdout_buff[MAX_LINE_LEN];
     char stderr_buff[MAX_LINE_LEN];
     sem_t stdout_mutex;
     sem_t stderr_mutex;
+    char **run_args;
     bool is_running;
 };
+
+struct ReaderArg {
+    int fd[2];
+    char *buf;
+    sem_t *mutex;
+};
+
 
 void destroy(char **split_string, sem_t *m1, sem_t *m2) {
     assert(!sem_destroy(m1));
