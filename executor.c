@@ -29,9 +29,9 @@ void *manage_output(void *arg)
     fprintf(stderr, "waiting for input\n");
 // TODO rozroznienie linii od jej czesci
     while (read_line(local_buf, MAX_LINE_LEN, in_stream, true)) {
-        printf("read %s\n", local_buf);
+//        printf("read %s\n", local_buf);
         assert(!sem_wait(rarg->mutex));
-        printf("wrote\n");
+//        printf("wrote\n");
         memcpy(rarg->buf, local_buf, MAX_LINE_LEN);
         assert(!sem_post(rarg->mutex));
     }
@@ -62,9 +62,9 @@ void *run(void *arg)
     assert(!pthread_create(&task->err_reader, NULL, manage_output, &err_reader_arg));
 
     task->pid = fork();
-    assert(task->pid != -1);
+    assert(task->pid  -1);
     if (!task->pid) {
-        fprintf(stderr, "executing exec\n");
+//        fprintf(stderr, "executing exec\n");
         dup2(fdout[1], STDOUT_FILENO);
         close(fdout[0]);
         close(fdout[1]);
@@ -87,7 +87,7 @@ void *run(void *arg)
 
     int status;
     if (waitpid(task->pid, &status, 0) == -1) {
-        fatal("waitpid failed\n");
+        fatal("waitpid failed\n"); // TODO delete
         exit(EXIT_FAILURE);
     }
     printf("Task %d ended\n", task_id);
