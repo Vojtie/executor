@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <semaphore.h>
+#include <limits.h>
 
 #include "utils.h"
 
@@ -18,26 +19,12 @@
 
 typedef uint16_t task_id_t;
 
-enum CommandT {
-    RUN,
-    OUT,
-    ERR,
-    KILL,
-    SLEEP,
-    QUIT
-};
-
-struct Command {
-    enum CommandT type;
+struct EndMsg {
+    bool signalled;
+    int exit_code;
     task_id_t task_id;
-    task_id_t task_args_len;
-    char **task_args;
-    char **to_be_freed;
+    pthread_t controller;
 };
-
-//struct Command parse_command(int argc, char **prog_args) {
-//
-//}
 
 struct Task {
     task_id_t task_id;
