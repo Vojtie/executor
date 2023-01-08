@@ -11,7 +11,6 @@
 #include "commands.h"
 #include "err.h"
 #include "utils.h"
-#include "pipeline-utils.h"
 
 int new_task_id = 0;
 struct Task tasks[MAX_N_TASKS];
@@ -266,43 +265,42 @@ int main(void)
                 fprintf(stderr, "pthread barrier %d\n", err);
                 exit(1);
             }
-        }
-        else if (!strcmp(*args, "out") || !strcmp(*args, "err")) {
-            assert(args[1]);
-            task_id_t task_id = (task_id_t)strtol(args[1], NULL, 10);
+        } else {
+            if (!strcmp(*args, "out") || !strcmp(*args, "err")) {
+                assert(args[1]);
+                task_id_t task_id = (task_id_t) strtol(args[1], NULL, 10);
 
-            if (task_id >= new_task_id) {
-                fprintf(stderr, "task %d has not been run!\n", task_id);
-            } else {
-                struct Task* task = &tasks[task_id];
+                if (task_id >= new_task_id) {
+                    fprintf(stderr, "task %d has not been run!\n", task_id);
+                } else {
+                    struct Task *task = &tasks[task_id];
 //                assert(!sem_wait(&print_mutex));
-                if (!strcmp(*args, "out"))
-                    print_line(&task->stdout_mutex, task->task_id, task->stdout_buff, "stdout");
-                else
-                    print_line(&task->stderr_mutex, task->task_id, task->stderr_buff, "stderr");
+                    if (!strcmp(*args, "out"))
+                        print_line(&task->stdout_mutex, task->task_id, task->stdout_buff, "stdout");
+                    else
+                        print_line(&task->stderr_mutex, task->task_id, task->stderr_buff, "stderr");
 //                assert(!sem_post(&print_mutex));
-            }
-        }
-        else if (!strcmp(*args, "sleep")) {
-            assert(args[1]);
-            long long nap_time = strtoll(args[1], NULL, 10);
+                }
+            } else if (!strcmp(*args, "sleep")) {
+                assert(args[1]);
+                long long nap_time = strtoll(args[1], NULL, 10);
 //            fprintf(stderr, "taking a nap... zZzz\n");
-            usleep(nap_time * 1000);
+                usleep(nap_time * 1000);
 //            fprintf(stderr, "woke up :D armed and ready!\n");
-        }
-        else if (!strcmp(*args, "kill")) {
-            assert(args[1]);
-            task_id_t task_id = (task_id_t) strtol(args[1], NULL, 10);
+            } else if (!strcmp(*args, "kill")) {
+                assert(args[1]);
+                task_id_t task_id = (task_id_t) strtol(args[1], NULL, 10);
 
-            if (task_id >= new_task_id) {
-                fprintf(stderr, "task %hu has not been run!\n", task_id);
-            } else {
-                kill(tasks[task_id].pid, SIGINT);
-            }
+                if (task_id >= new_task_id) {
+                    fprintf(stderr, "task %hu has not been run!\n", task_id);
+                } else {
+                    kill(tasks[task_id].pid, SIGINT);
+                }
 //            continue; - we don't know if the process will exit after sending SIGINT
-        }
-        else if (strcmp(*args, "\n") != 0) {
-            fprintf(stderr, "wrong command\n"); // TODO break
+            } else if (strcmp(*args, "\n") != 0) {
+                fprintf(stderr, "Wrong command\n"); // TODO break
+            }
+            free_split_string(args);
         }
 
         assert(!sem_wait(&pc_mutex)); // finish processing command
