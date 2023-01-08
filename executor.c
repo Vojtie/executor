@@ -18,11 +18,19 @@ struct Task tasks[MAX_N_TASKS];
 
 struct EndMsg end_msgs[MAX_N_TASKS];
 int end_msgs_cnt = 0;
+sem_t emc_m;
+
+int finished_proc_cnt = 0;
+sem_t fpc_mutex;
+
+sem_t end_info_m;
 
 sem_t print_mutex; // to mutuallly exclude printing info
 
 sem_t pc_mutex;
 bool processing_command = false;
+
+pthread_barrier_t task_start_info_br;
 
 void kill_tasks();
 
@@ -31,9 +39,8 @@ void *manage_output(void *arg)
     struct ReaderArg* rarg = arg;
     char local_buf[MAX_LINE_LEN];
     FILE *in_stream = fdopen(rarg->fd[0], "r");
-    assert(!close(rarg->fd[1]));
+//    assert(!close(rarg->fd[1]));
 
-    fprintf(stderr, "waiting for input\n");
 // TODO rozroznienie linii od jej czesci
     while (read_line(local_buf, MAX_LINE_LEN, in_stream, true)) {
 //        printf("read %s\n", local_buf);
@@ -42,6 +49,7 @@ void *manage_output(void *arg)
         memcpy(rarg->buf, local_buf, MAX_LINE_LEN);
         assert(!sem_post(rarg->mutex));
     }
+    assert(!fclose(in_stream));
     return 0;
 }
 
@@ -51,8 +59,6 @@ void *run(void *arg)
     struct Task *task = &tasks[task_id];
     char **task_args = task->run_args + 1;
     task->is_running = true;
-
-    printf("running task %d :> %s\n", task_id, task->run_args[1]);
 
     int fderr[2];
     int fdout[2];
@@ -70,20 +76,21 @@ void *run(void *arg)
     assert(!pthread_create(&task->err_reader, NULL, manage_output, &err_reader_arg));
 
     task->pid = fork();
-    assert(task->pid  -1);
+    assert(task->pid != -1);
     if (!task->pid) {
 //        fprintf(stderr, "executing exec\n");
         if (dup2(fdout[1], STDOUT_FILENO) == -1) {
             fatal("dup2 failed: %s\n", strerror(errno));
         }
-        assert(!close(fdout[0]));
-        assert(!close(fdout[1]));
+//        assert(!close(fdout[0]));
+//        assert(!close(fdout[1]));
 
         if (dup2(fderr[1], STDERR_FILENO) == -1) {
             fatal("dup2 failed: %s\n", strerror(errno));
         }
-        assert(!close(fderr[1]));
-        assert(!close(fderr[0]));
+        // close stdin too
+//        assert(!close(fderr[1]));
+//        assert(!close(fderr[0]));
         if (task_args[0][0] == '.') {
             execv(task_args[0], task_args);
         } else {
@@ -91,42 +98,57 @@ void *run(void *arg)
         }
         exit(2);
     }
+    assert(!close(fdout[1]));
+    assert(!close(fderr[1]));
     printf("Task %d started: pid %d.\n", task_id, task->pid); // TODO podczas sleep?
-//    assert(!close(fdout[1]));
-//    assert(!close(fderr[1]));
-
-    assert(!sem_post(&print_mutex));
+    int err = pthread_barrier_wait(&task_start_info_br);
+    if (err != 0 && err != PTHREAD_BARRIER_SERIAL_THREAD) {
+        fprintf(stderr, "pthread barrier %d\n", err);
+        exit(1);
+    }
 
     int status;
     if (waitpid(task->pid, &status, 0) == -1) {
-        fatal("waitpid failed\n"); // TODO delete
+        fatal("waitpid failed\n");
         exit(EXIT_FAILURE);
     }
-    fprintf(stderr, "Task %d ended\n", task_id);
+    assert(!sem_wait(&fpc_mutex));
+    finished_proc_cnt++;
+    if (finished_proc_cnt == 1) {
+        assert(!sem_wait(&pc_mutex)); // first finished process blocks main thread from
+    }                                 // starting or finishing processsing command
+    assert(!sem_post(&fpc_mutex));
+
+//    task->is_running = false; // delete
 //    void *out_status, *err_status;
     assert(!pthread_join(task->out_reader, NULL));
     assert(!pthread_join(task->err_reader, NULL));
-    close(fdout[0]);
-    close(fderr[0]);
+//    close(fdout[0]); - threads close stream which closes fd as well
+//    close(fderr[0]);
 //    assert(!(*(int *)out_status));
 //    assert(!(*(int *)err_status));
     bool signalled = false;
     int exit_code = -1;
+
     if (WIFEXITED(status)) {
         exit_code = WEXITSTATUS(status);
     } else {
         signalled = true;
     }
-    assert(!sem_wait(&pc_mutex));
 
     if (processing_command) {
         assert(end_msgs_cnt < MAX_N_TASKS);
+        assert(!sem_wait(&emc_m));
         struct EndMsg *end_msg = &end_msgs[end_msgs_cnt++];
+        assert(!sem_post(&emc_m));
         end_msg->task_id = task_id;
         end_msg->signalled = signalled;
         end_msg->exit_code = exit_code;
         end_msg->controller = task->controller;
     } else {
+//        int sval;
+//        assert(!sem_getvalue(&print_mutex, &sval));
+//        fprintf(stderr, "printing end info, print_mtx val: %d\n", sval);
         assert(!sem_wait(&print_mutex));
         if (signalled) {
             printf("Task %d ended: signalled.\n", task_id);
@@ -135,8 +157,12 @@ void *run(void *arg)
         }
         assert(!sem_post(&print_mutex));
     }
-//    free_split_string(run_args);
-    assert(!sem_post(&pc_mutex));
+    assert(!sem_wait(&fpc_mutex));
+    finished_proc_cnt--;
+    if (finished_proc_cnt == 0) {
+        assert(!sem_post(&pc_mutex)); // unables main thread to change state
+    }
+    assert(!sem_post(&fpc_mutex));
     return NULL;
 }
 
@@ -146,6 +172,7 @@ void init_tasks()
         struct Task *task = &tasks[i];
         task->task_id = i;
         task->is_running = false;
+        task->was_joined = false;
         memset(task->stdout_buff, '\0', MAX_LINE_LEN);
         memset(task->stderr_buff, '\0', MAX_LINE_LEN);
         assert(!sem_init(&task->stderr_mutex, 0, 1));
@@ -165,9 +192,12 @@ void free_tasks()
     }
 }
 
-struct Task *new_task()
+struct Task *new_task(char **args)
 {
-    return &tasks[new_task_id++];
+    struct Task* new = &tasks[new_task_id++];
+    new->is_running = true;
+    new->run_args = args;
+    return new;
 }
 
 void print_line(sem_t *mutex, task_id_t task_id, const char *line, const char *line_src_strm)
@@ -185,6 +215,7 @@ void print_overdue_end_infos() {
         // ensure that after printing the end message the controller thread is gone
         // which means that all the threads/processes associated with this task are gone
         assert(!pthread_join(end_msg.controller, NULL));
+        tasks[end_msg.task_id].was_joined = true;
         if (end_msg.signalled) {
             printf("Task %d ended: signalled.\n", end_msg.task_id);
         } else {
@@ -195,14 +226,23 @@ void print_overdue_end_infos() {
     assert(!sem_post(&print_mutex));
 }
 
-int main(void)
-{
-//    fatal("");
-    init_tasks();
-    char input[511];
+void init_global_synch_mechs() {
+    assert(!pthread_barrier_init(&task_start_info_br, NULL, 2));
     assert(!sem_init(&print_mutex, 0, 1));
     assert(!sem_init(&pc_mutex, 0, 1));
+    assert(!sem_init(&fpc_mutex, 0, 1));
+    assert(!sem_init(&end_info_m, 0, 1));
+    assert(!sem_init(&emc_m, 0, 1));
+}
 
+int main(void)
+{
+//    exit(1);
+//fatal("");
+//    printf("xxx");
+    init_tasks();
+    init_global_synch_mechs();
+    char input[511];
     bool broke = false;
     while (read_line(input, 511, stdin, true))
     {
@@ -219,11 +259,13 @@ int main(void)
         }
         if (!strcmp(*args, "run")) {
             assert(args[1]);
-            struct Task *task = new_task();
-            task->run_args = args;
-            assert(!sem_wait(&print_mutex));
+            struct Task *task = new_task(args);
             assert(!pthread_create(&task->controller, NULL, run, &task->task_id));
-            //continue;
+            int err = pthread_barrier_wait(&task_start_info_br);
+            if (err != 0 && err != PTHREAD_BARRIER_SERIAL_THREAD) {
+                fprintf(stderr, "pthread barrier %d\n", err);
+                exit(1);
+            }
         }
         else if (!strcmp(*args, "out") || !strcmp(*args, "err")) {
             assert(args[1]);
@@ -233,12 +275,12 @@ int main(void)
                 fprintf(stderr, "task %d has not been run!\n", task_id);
             } else {
                 struct Task* task = &tasks[task_id];
-                assert(!sem_wait(&print_mutex));
+//                assert(!sem_wait(&print_mutex));
                 if (!strcmp(*args, "out"))
                     print_line(&task->stdout_mutex, task->task_id, task->stdout_buff, "stdout");
                 else
                     print_line(&task->stderr_mutex, task->task_id, task->stderr_buff, "stderr");
-                assert(!sem_post(&print_mutex));
+//                assert(!sem_post(&print_mutex));
             }
         }
         else if (!strcmp(*args, "sleep")) {
@@ -250,12 +292,11 @@ int main(void)
         }
         else if (!strcmp(*args, "kill")) {
             assert(args[1]);
-            task_id_t task_id = (task_id_t)strtol(args[1], NULL, 10);
+            task_id_t task_id = (task_id_t) strtol(args[1], NULL, 10);
 
             if (task_id >= new_task_id) {
                 fprintf(stderr, "task %hu has not been run!\n", task_id);
             } else {
-                //            if (tasks[task_id]->is_running) { // to avoid sending task when process just finished and posted mutex but didnt exit
                 kill(tasks[task_id].pid, SIGINT);
             }
 //            continue; - we don't know if the process will exit after sending SIGINT
@@ -280,6 +321,10 @@ int main(void)
 //    print_overdue_end_infos(); // - print or not to print after quit - to choose
     assert(!sem_destroy(&print_mutex));
     assert(!sem_destroy(&pc_mutex));
+    assert(!sem_destroy(&fpc_mutex));
+    assert(!sem_destroy(&end_info_m));
+    assert(!sem_destroy(&emc_m));
+    assert(!pthread_barrier_destroy(&task_start_info_br));
     free_tasks();
     return 0;
 }
@@ -290,6 +335,7 @@ void kill_tasks()
         struct Task *task = &tasks[i];
         kill(task->pid, SIGKILL);
         // "All the threads in your process will be terminated when you return from main()."
-        assert(!pthread_join(task->controller, NULL));
+        if (!task->was_joined)
+            assert(!pthread_join(task->controller, NULL));
     }
 }

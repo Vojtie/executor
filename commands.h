@@ -38,6 +38,7 @@ struct Task {
     sem_t stderr_mutex;
     char **run_args;
     bool is_running;
+    bool was_joined;
 };
 
 struct ReaderArg {
