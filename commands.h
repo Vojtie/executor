@@ -26,6 +26,11 @@ struct EndMsg {
     pthread_t controller;
 };
 
+struct ControllerTaskId {
+    task_id_t task_id;
+    pthread_t controller;
+};
+
 struct Task {
     task_id_t task_id;
     pid_t pid;

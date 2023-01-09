@@ -22,8 +22,6 @@ sem_t emc_m;
 int finished_proc_cnt = 0;
 sem_t fpc_mutex;
 
-sem_t end_info_m;
-
 sem_t print_mutex; // to mutuallly exclude printing info
 
 sem_t pc_mutex;
@@ -51,6 +49,8 @@ void *manage_output(void *arg)
     assert(!fclose(in_stream));
     return 0;
 }
+
+struct ControllerTaskId prev_controller_task_id = {.controller = -1};
 
 void *run(void *arg)
 {
@@ -136,29 +136,36 @@ void *run(void *arg)
     }
 
     if (processing_command) {
-        assert(end_msgs_cnt < MAX_N_TASKS);
         assert(!sem_wait(&emc_m));
+        assert(end_msgs_cnt < MAX_N_TASKS);
         struct EndMsg *end_msg = &end_msgs[end_msgs_cnt++];
-        assert(!sem_post(&emc_m));
         end_msg->task_id = task_id;
         end_msg->signalled = signalled;
         end_msg->exit_code = exit_code;
         end_msg->controller = task->controller;
+        assert(!sem_post(&emc_m));
     } else {
 //        int sval;
 //        assert(!sem_getvalue(&print_mutex, &sval));
 //        fprintf(stderr, "printing end info, print_mtx val: %d\n", sval);
         assert(!sem_wait(&print_mutex));
+        if (prev_controller_task_id.controller != -1) {
+            assert(!pthread_join(prev_controller_task_id.controller, NULL));
+            tasks[prev_controller_task_id.task_id].was_joined = true;
+        }
         if (signalled) {
             printf("Task %d ended: signalled.\n", task_id);
         } else {
             printf("Task %d ended: status %d.\n", task_id, exit_code);
         }
+        prev_controller_task_id.controller = task->controller;
+        prev_controller_task_id.task_id = task_id;
         assert(!sem_post(&print_mutex));
     }
     assert(!sem_wait(&fpc_mutex));
     finished_proc_cnt--;
     if (finished_proc_cnt == 0) {
+        prev_controller_task_id.controller = -1;
         assert(!sem_post(&pc_mutex)); // unables main thread to change state
     }
     assert(!sem_post(&fpc_mutex));
@@ -230,9 +237,13 @@ void init_global_synch_mechs() {
     assert(!sem_init(&print_mutex, 0, 1));
     assert(!sem_init(&pc_mutex, 0, 1));
     assert(!sem_init(&fpc_mutex, 0, 1));
-    assert(!sem_init(&end_info_m, 0, 1));
     assert(!sem_init(&emc_m, 0, 1));
 }
+
+//void *handler(void* arg)
+//{
+//
+//}
 
 int main(void)
 {
@@ -320,7 +331,6 @@ int main(void)
     assert(!sem_destroy(&print_mutex));
     assert(!sem_destroy(&pc_mutex));
     assert(!sem_destroy(&fpc_mutex));
-    assert(!sem_destroy(&end_info_m));
     assert(!sem_destroy(&emc_m));
     assert(!pthread_barrier_destroy(&task_start_info_br));
     free_tasks();
