@@ -1,7 +1,3 @@
-//
-// Created by Wojciech Kuzebski on 14/12/2022.
-//
-
 #ifndef MIMUW_FORK_COMMANDS_H
 #define MIMUW_FORK_COMMANDS_H
 
@@ -19,7 +15,7 @@
 
 typedef uint16_t task_id_t;
 
-struct EndMsg {
+struct EndedMessage {
     bool signalled;
     int exit_code;
     task_id_t task_id;
@@ -42,7 +38,6 @@ struct Task {
     sem_t stdout_mutex;
     sem_t stderr_mutex;
     char **run_args;
-    bool is_running;
     bool was_joined;
 };
 
@@ -52,11 +47,4 @@ struct ReaderArg {
     sem_t *mutex;
 };
 
-
-void destroy(char **split_string, sem_t *m1, sem_t *m2) {
-    assert(!sem_destroy(m1));
-    assert(!sem_destroy(m2));
-    free_split_string(split_string);
-}
-
-#endif // MIMUW_FORK_COMMANDS_H
+#endif
