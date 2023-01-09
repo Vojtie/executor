@@ -1,4 +1,3 @@
-#include "err.h"
 #include "utils.h"
 
 #include <assert.h>
@@ -61,7 +60,7 @@ void free_split_string(char** parts)
 bool read_line(char* buffer, size_t size_of_buffer, FILE* file, bool trim_newline)
 {
     if (size_of_buffer < 2)
-        fatal("Buffer too small: %d\n", size_of_buffer);
+        exit(1);
 
     char* line = NULL;
     size_t n_bytes;
@@ -85,11 +84,11 @@ bool read_line(char* buffer, size_t size_of_buffer, FILE* file, bool trim_newlin
 
     size_t len = strlen(line);
     if (len < n_chars)
-        fatal("Null character in input.");
+        exit(1);
     assert(n_chars == len);
 
     if (len + 1 > size_of_buffer)
-        fatal("Line too long: %d > %d.", len, size_of_buffer - 1);
+        exit(1);
 
     if (trim_newline && len > 1 && line[len - 1] == '\n') {
         line[len - 1] = '\0';
