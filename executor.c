@@ -24,6 +24,9 @@ sem_t fpc_mutex;
 
 sem_t print_mutex; // to mutuallly exclude printing info
 
+bool finishing = false;
+sem_t fnsh_mtx;
+
 sem_t pc_mutex;
 bool processing_command = false;
 
@@ -97,6 +100,7 @@ void *run(void *arg)
         }
         exit(2);
     }
+    free_split_string(task->run_args);
     assert(!close(fdout[1]));
     assert(!close(fderr[1]));
     printf("Task %d started: pid %d.\n", task_id, task->pid); // TODO podczas sleep?
@@ -165,7 +169,8 @@ void *run(void *arg)
     assert(!sem_wait(&fpc_mutex));
     finished_proc_cnt--;
     if (finished_proc_cnt == 0) {
-        prev_controller_task_id.controller = -1;
+        if (processing_command)
+            prev_controller_task_id.controller = -1;
         assert(!sem_post(&pc_mutex)); // unables main thread to change state
     }
     assert(!sem_post(&fpc_mutex));
@@ -192,9 +197,9 @@ void free_tasks()
         struct Task *task = &tasks[i];
         assert(!sem_destroy(&task->stdout_mutex));
         assert(!sem_destroy(&task->stderr_mutex));
-        if (i < new_task_id) {
-            free_split_string(task->run_args);
-        }
+//        if (i < new_task_id) {
+//            free_split_string(task->run_args);
+//        }
     }
 }
 
@@ -220,8 +225,10 @@ void print_overdue_end_infos() {
         struct EndMsg end_msg = end_msgs[i];
         // ensure that after printing the end message the controller thread is gone
         // which means that all the threads/processes associated with this task are gone
-        assert(!pthread_join(end_msg.controller, NULL));
-        tasks[end_msg.task_id].was_joined = true;
+        if (!tasks[end_msg.task_id].was_joined) {
+            assert(!pthread_join(end_msg.controller, NULL));
+            tasks[end_msg.task_id].was_joined = true;
+        }
         if (end_msg.signalled) {
             printf("Task %d ended: signalled.\n", end_msg.task_id);
         } else {
@@ -238,6 +245,7 @@ void init_global_synch_mechs() {
     assert(!sem_init(&pc_mutex, 0, 1));
     assert(!sem_init(&fpc_mutex, 0, 1));
     assert(!sem_init(&emc_m, 0, 1));
+    assert(!sem_init(&fnsh_mtx, 0, 0));
 }
 
 //void *handler(void* arg)
@@ -257,6 +265,10 @@ int main(void)
     while (read_line(input, 511, stdin, true))
     {
         assert(!sem_wait(&pc_mutex)); // begin processing command
+        if (prev_controller_task_id.controller != -1) {
+            assert(!pthread_join(prev_controller_task_id.controller, NULL));
+            tasks[prev_controller_task_id.task_id].was_joined = true;
+        }
         processing_command = true;
         assert(!sem_post(&pc_mutex));
 
@@ -265,12 +277,18 @@ int main(void)
         
         if (!strcmp(*args, "quit")) {
             broke = true;
+            finishing = true;
+            free_split_string(args);
             break;
         }
         if (!strcmp(*args, "run")) {
             assert(args[1]);
             struct Task *task = new_task(args);
-            assert(!pthread_create(&task->controller, NULL, run, &task->task_id));
+            int s;
+            s = pthread_create(&task->controller, NULL, run, &task->task_id);
+            if (s != 0) {
+                fatal("pthread create: %s, %s", strerror(s), strerror(errno));
+            }
             int err = pthread_barrier_wait(&task_start_info_br);
             if (err != 0 && err != PTHREAD_BARRIER_SERIAL_THREAD) {
                 fprintf(stderr, "pthread barrier %d\n", err);
@@ -320,14 +338,17 @@ int main(void)
         assert(!sem_post(&pc_mutex));
     }
     if (!broke) { // read EOF
-        assert(!sem_wait(&pc_mutex));
+        assert(!sem_wait(&pc_mutex)); // begin processing command
+        if (prev_controller_task_id.controller != -1) {
+            assert(!pthread_join(prev_controller_task_id.controller, NULL));
+        }
         processing_command = true;
         assert(!sem_post(&pc_mutex));
     } // else - quit
     // assert(!sem_wait(&print_mutex)); - deadlock with run
     kill_tasks();
     // all tasks were killed and all threads finished normally
-//    print_overdue_end_infos(); // - print or not to print after quit - to choose
+    print_overdue_end_infos(); // - print or not to print after quit - to choose
     assert(!sem_destroy(&print_mutex));
     assert(!sem_destroy(&pc_mutex));
     assert(!sem_destroy(&fpc_mutex));
@@ -343,7 +364,9 @@ void kill_tasks()
         struct Task *task = &tasks[i];
         kill(task->pid, SIGKILL);
         // "All the threads in your process will be terminated when you return from main()."
-        if (!task->was_joined)
+        if (!task->was_joined) {
             assert(!pthread_join(task->controller, NULL));
+            task->was_joined = true;
+        }
     }
 }
