@@ -239,6 +239,42 @@ void set_processing_command(bool start_processing)
     ASSERT_ZERO(sem_post(&main_thread_mtx));
 }
 
+bool manage_command(char **args)
+{
+    if (!strcmp(*args, "quit")) {
+        free_split_string(args);
+        return true;
+    }
+    if (!strcmp(*args, "run")) {
+        struct Task *task = new_task(args);
+        ASSERT_ZERO(pthread_create(&task->controller, NULL, run, &task->task_id));
+        wait_run_task();
+    }
+    else if (!strcmp(*args, "out") || !strcmp(*args, "err")) {
+        task_id_t task_id = (task_id_t) strtol(args[1], NULL, 10);
+        struct Task *task = &tasks[task_id];
+        if (!strcmp(*args, "out"))
+            print_line(&task->stdout_mutex, task->task_id, task->stdout_buff, "stdout");
+        else
+            print_line(&task->stderr_mutex, task->task_id, task->stderr_buff, "stderr");
+    }
+    else if (!strcmp(*args, "sleep")) {
+        assert(args[1]);
+        long long nap_time = strtoll(args[1], NULL, 10);
+        usleep(nap_time * 1000);
+    }
+    else if (!strcmp(*args, "kill")) {
+        assert(args[1]);
+        task_id_t task_id = (task_id_t) strtol(args[1], NULL, 10);
+        kill(tasks[task_id].pid, SIGINT);
+    }
+    if (strcmp(*args, "run") != 0) {
+        free_split_string(args);
+    }
+
+    return false;
+}
+
 int main(void)
 {
     init();
@@ -250,38 +286,8 @@ int main(void)
         set_processing_command(true);
 
         char **args = split_string(input);
-        
-        if (!strcmp(*args, "quit")) {
-            quit = true;
-            free_split_string(args);
-            break;
-        }
-        if (!strcmp(*args, "run")) {
-            struct Task *task = new_task(args);
-            ASSERT_ZERO(pthread_create(&task->controller, NULL, run, &task->task_id));
-            wait_run_task();
-        }
-        else {
-            if (!strcmp(*args, "out") || !strcmp(*args, "err")) {
-                task_id_t task_id = (task_id_t) strtol(args[1], NULL, 10);
-                struct Task *task = &tasks[task_id];
-                if (!strcmp(*args, "out"))
-                    print_line(&task->stdout_mutex, task->task_id, task->stdout_buff, "stdout");
-                else
-                    print_line(&task->stderr_mutex, task->task_id, task->stderr_buff, "stderr");
-            }
-            else if (!strcmp(*args, "sleep")) {
-                assert(args[1]);
-                long long nap_time = strtoll(args[1], NULL, 10);
-                usleep(nap_time * 1000);
-            }
-            else if (!strcmp(*args, "kill")) {
-                assert(args[1]);
-                task_id_t task_id = (task_id_t) strtol(args[1], NULL, 10);
-                kill(tasks[task_id].pid, SIGINT);
-            }
-            free_split_string(args);
-        }
+        quit = manage_command(args);
+        if (quit) break;
 
         set_processing_command(false);
     }
