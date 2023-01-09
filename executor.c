@@ -53,7 +53,7 @@ void *manage_output(void *arg)
     return 0;
 }
 
-struct ControllerTaskId prev_controller_task_id = {.controller = -1};
+struct ControllerTaskId prev_controller_task_id = {.controller = -1, .task_id = -1};
 
 void *run(void *arg)
 {
@@ -153,7 +153,7 @@ void *run(void *arg)
 //        assert(!sem_getvalue(&print_mutex, &sval));
 //        fprintf(stderr, "printing end info, print_mtx val: %d\n", sval);
         assert(!sem_wait(&print_mutex));
-        if (!tasks[prev_controller_task_id.task_id].was_joined) {
+        if (prev_controller_task_id.controller != -1 && !tasks[prev_controller_task_id.task_id].was_joined) {
             assert(!pthread_join(prev_controller_task_id.controller, NULL));
             tasks[prev_controller_task_id.task_id].was_joined = true;
         }
@@ -169,8 +169,10 @@ void *run(void *arg)
     assert(!sem_wait(&fpc_mutex));
     finished_proc_cnt--;
     if (finished_proc_cnt == 0) {
-        if (processing_command)
+        if (processing_command) {
             prev_controller_task_id.controller = -1;
+            prev_controller_task_id.task_id = -1;
+        }
         assert(!sem_post(&pc_mutex)); // unables main thread to change state
     }
     assert(!sem_post(&fpc_mutex));
@@ -268,6 +270,8 @@ int main(void)
         if (prev_controller_task_id.controller != -1) {
             assert(!pthread_join(prev_controller_task_id.controller, NULL));
             tasks[prev_controller_task_id.task_id].was_joined = true;
+            prev_controller_task_id.controller = -1;
+            prev_controller_task_id.task_id = -1;
         }
         processing_command = true;
         assert(!sem_post(&pc_mutex));
