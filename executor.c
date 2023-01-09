@@ -15,21 +15,11 @@
 int new_task_id = 0;
 struct Task tasks[MAX_N_TASKS];
 
-struct EndMsg end_msgs[MAX_N_TASKS];
-int end_msgs_cnt = 0;
-sem_t emc_m;
-
-int finished_proc_cnt = 0;
 sem_t fpc_mutex;
-
-sem_t end_info_m;
-
-sem_t print_mutex; // to mutuallly exclude printing info
-
 sem_t pc_mutex;
-bool processing_command = false;
 
-pthread_barrier_t task_start_info_br;
+bool processing_command = true;
+bool handling = true;
 
 void kill_tasks();
 
@@ -212,35 +202,17 @@ void print_line(sem_t *mutex, task_id_t task_id, const char *line, const char *l
     assert(!sem_post(mutex));
 }
 
-void print_overdue_end_infos() {
-    // in the possesion of pc_mutex
-    assert(!sem_wait(&print_mutex));
-    for (int i = 0; i < end_msgs_cnt; ++i) {
-        struct EndMsg end_msg = end_msgs[i];
-        // ensure that after printing the end message the controller thread is gone
-        // which means that all the threads/processes associated with this task are gone
-        tasks[end_msg.task_id].was_joined = true;
-        if (end_msg.signalled) {
-            printf("Task %d ended: signalled.\n", end_msg.task_id);
-        } else {
-            printf("Task %d ended: status %d.\n", end_msg.task_id, end_msg.exit_code);
-        }
-    }
-    end_msgs_cnt = 0;
-    assert(!sem_post(&print_mutex));
-}
 
 void init_global_synch_mechs() {
     assert(!pthread_barrier_init(&task_start_info_br, NULL, 2));
-    assert(!sem_init(&print_mutex, 0, 1));
+    assert(!pthread_mutex_init(&mutex, NULL));
     assert(!sem_init(&pc_mutex, 0, 1));
-    assert(!sem_init(&fpc_mutex, 0, 1));
-    assert(!sem_init(&end_info_m, 0, 1));
-    assert(!sem_init(&emc_m, 0, 1));
+    assert(!sem_init(&fpc_mutex, 0, 0));
 }
 
 void *handle_ends(void *arg)
 {
+//    fprintf(stderr, "starting handler\n");
     siginfo_t info;
     sigset_t signals_to_wait_for;
     sigemptyset(&signals_to_wait_for);
@@ -248,10 +220,25 @@ void *handle_ends(void *arg)
     sigaddset(&signals_to_wait_for, SIGCHLD);
     for (;;) {
         if (sigwaitinfo(&signals_to_wait_for, &info) == -1) fatal("sigwait");
-        fprintf(stderr, "received signal\n");
+        sigset_t pending_mask;
+        sigpending(&pending_mask);
+        if (sigismember(&pending_mask, SIGINT))
+            break;
+//        fprintf(stderr, "received signal\n");
+        int sval;
+        sem_getvalue(&pc_mutex, &sval);
+//        fprintf(stderr, "handler pcmutex val: %d\n", sval);
         assert(!sem_wait(&pc_mutex));
+        if (processing_command) {
+            handling = true;
+            assert(!sem_post(&pc_mutex));
+            assert(!sem_wait(&fpc_mutex)); // takes ownership of pc
+            handling = false;
+        }
+//        assert(!pthread_mutex_lock(&mutex));
+//        fprintf(stderr, "handler got mutex\n");
         while (1) {
-            printf("Parent: got signal >>%s<< from %d\n", strsignal(info.si_signo), info.si_pid);
+//            printf("Parent: got signal >>%s<< from %d\n", strsignal(info.si_signo), info.si_pid);
             int status, es;
             waitpid(info.si_pid, &status, WNOHANG);
             if (WIFEXITED(status)) {
@@ -260,20 +247,21 @@ void *handle_ends(void *arg)
             } else {
                 printf("Task ended: signalled.\n");
             }
-            sigset_t pending_mask;
             sigpending(&pending_mask);
             if (!sigismember(&pending_mask, SIGCHLD))
                 break;
             if (sigwaitinfo(&signals_to_wait_for, &info) == -1) fatal("sigwait");
         }
         assert(!sem_post(&pc_mutex));
+//        assert(!pthread_mutex_unlock(&mutex));
+//        fprintf(stderr, "handler posted mutex\n");
     }
 }
 
 int main(void)
 {
 //    exit(1);
-//fatal("");
+//    fatal("");
 //    printf("xxx");
     init_tasks();
     init_global_synch_mechs();
@@ -284,6 +272,7 @@ int main(void)
         will inherit a copy of the signal mask. */
     sigemptyset(&set);
     sigaddset(&set, SIGCHLD);
+    sigaddset(&set, SIGUSR1);
     s = pthread_sigmask(SIG_BLOCK, &set, NULL);
     if (s != 0)
         fatal("pthread_sigmask");
@@ -295,7 +284,10 @@ int main(void)
     while (read_line(input, 511, stdin, true))
     {
         assert(!sem_wait(&pc_mutex)); // begin processing command
-        fprintf(stderr, "begin proc comm\n");
+        processing_command = true;
+        assert(!sem_post(&pc_mutex));
+//        assert(!pthread_mutex_lock(&mutex));
+//        fprintf(stderr, "main begin proc comm\n");
         char **args = split_string(input);
         assert(*args);
         
@@ -345,8 +337,18 @@ int main(void)
             free_split_string(args);
         }
 //        print_overdue_end_infos();    // print infos about processes that finished during command processing
-        fprintf(stderr, "finish proc comm\n");
-        assert(!sem_post(&pc_mutex));
+//        fprintf(stderr, "main finish proc comm\n");
+        assert(!sem_wait(&pc_mutex));
+        processing_command = false;
+        if (handling)
+            assert(!sem_post(&fpc_mutex)); // passing pc
+        else
+            assert(!sem_post(&pc_mutex));
+//        assert(!pthread_mutex_unlock(&mutex));
+        int sval;
+        sem_getvalue(&pc_mutex, &sval);
+//        fprintf(stderr, "main pcmutex val: %d\n", sval);
+//        usleep(100 * 1000);
     }
     if (!broke) { // read EOF
         assert(!sem_wait(&pc_mutex));

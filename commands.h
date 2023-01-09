@@ -19,13 +19,6 @@
 
 typedef uint16_t task_id_t;
 
-struct EndMsg {
-    bool signalled;
-    int exit_code;
-    task_id_t task_id;
-    pthread_t controller;
-};
-
 struct Task {
     task_id_t task_id;
     pid_t pid;
@@ -41,13 +34,6 @@ struct Task {
     int fderr[2];
     int fdout[2];
 };
-
-struct ReaderArg {
-    int fd[2];
-    char *buf;
-    sem_t *mutex;
-};
-
 
 void destroy(char **split_string, sem_t *m1, sem_t *m2) {
     assert(!sem_destroy(m1));
