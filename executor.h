@@ -1,5 +1,5 @@
-#ifndef MIMUW_FORK_COMMANDS_H
-#define MIMUW_FORK_COMMANDS_H
+#ifndef MIMUW_FORK_EXECUTOR_H
+#define MIMUW_FORK_EXECUTOR_H
 
 #include <stdint.h>
 #include <string.h>
@@ -46,5 +46,19 @@ struct ReaderArg {
     char *buf;
     sem_t *mutex;
 };
+
+void assert_zero(int expr)
+{
+    if (expr != 0) {
+        exit(1);
+    }
+}
+
+void assert_sys_ok(int expr)
+{
+    if (expr == -1) {
+        exit(1);
+    }
+}
 
 #endif
