@@ -29,7 +29,6 @@ struct EndMsg {
 struct Task {
     task_id_t task_id;
     pid_t pid;
-    pthread_t controller;
     pthread_t out_reader;
     pthread_t err_reader;
     char stdout_buff[MAX_LINE_LEN];
@@ -39,6 +38,8 @@ struct Task {
     char **run_args;
     bool is_running;
     bool was_joined;
+    int fderr[2];
+    int fdout[2];
 };
 
 struct ReaderArg {
