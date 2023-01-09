@@ -11,7 +11,6 @@ function(add_example_program target_name)
     target_link_libraries(${target_name} pthread)
 endfunction()
 
-add_library(err err.c)
 add_library(utils utils.c)
 
 add_example_program(executor)

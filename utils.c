@@ -19,12 +19,14 @@
 void set_close_on_exec(int file_descriptor, bool value)
 {
     int flags = fcntl(file_descriptor, F_GETFD);
-    ASSERT_SYS_OK(flags);
+    if (flags == -1)
+        exit(1);
     if (value)
         flags |= FD_CLOEXEC;
     else
         flags &= ~FD_CLOEXEC;
-    ASSERT_SYS_OK(fcntl(file_descriptor, F_SETFD, flags));
+    if (fcntl(file_descriptor, F_SETFD, flags) == -1)
+        exit(1);
 }
 
 char** split_string(const char* s)
@@ -68,7 +70,7 @@ bool read_line(char* buffer, size_t size_of_buffer, FILE* file, bool trim_newlin
     if (n_chars == -1) {
         free(line);
         if (ferror(file))
-            syserr("Getline failed.");
+            exit(1);
         assert(feof(file));
         buffer[0] = '\0';
         return false;
