@@ -153,7 +153,7 @@ void *run(void *arg)
 //        assert(!sem_getvalue(&print_mutex, &sval));
 //        fprintf(stderr, "printing end info, print_mtx val: %d\n", sval);
         assert(!sem_wait(&print_mutex));
-        if (prev_controller_task_id.controller != -1) {
+        if (!tasks[prev_controller_task_id.task_id].was_joined) {
             assert(!pthread_join(prev_controller_task_id.controller, NULL));
             tasks[prev_controller_task_id.task_id].was_joined = true;
         }
